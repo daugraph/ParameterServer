@@ -1,28 +1,22 @@
-buildscript {
-    repositories {
-        mavenCentral()
-    }
-    dependencies {
-        classpath('com.google.protobuf:protobuf-gradle-plugin:0.8.17')
-    }
+plugins {
+    id 'java'
+    id 'idea'
+    id "com.google.protobuf" version "0.8.17"
+    id "com.github.johnrengelman.shadow" version "7.0.0"
 }
 
-apply plugin: 'java'
-apply plugin: 'com.google.protobuf'
-apply plugin: 'idea'
+jar.enabled = false
 
-group 'org.ps'
+repositories {
+    mavenCentral()
+}
+
+group 'cn.daugraph'
 version '0.1'
 
 def generatedSourcesDir = file('src/generated/main/java')
 sourceSets {
     main {
-        proto {
-            // In addition to the default 'src/main/proto'
-            srcDir 'src/main/proto'
-            include '**/*.protodevel'
-        }
-
         java {
             srcDirs += [generatedSourcesDir]
         }
@@ -42,7 +36,9 @@ repositories {
 
 dependencies {
     implementation 'org.zeromq:jeromq:0.5.2'
-    implementation 'org.slf4j:slf4j-api:1.7.32'
+    implementation 'org.apache.logging.log4j:log4j-api:2.11.1'
+    implementation 'org.apache.logging.log4j:log4j-core:2.11.1'
+    implementation "org.apache.logging.log4j:log4j-slf4j-impl:2.11.1"
     implementation 'com.google.protobuf:protobuf-java:3.17.3'
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.7.0'
     testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.7.0'
@@ -61,3 +57,7 @@ idea {
 test {
     useJUnitPlatform()
 }
+
+shadowJar { }
+
+assemble.dependsOn(shadowJar)
