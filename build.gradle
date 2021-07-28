@@ -1,0 +1,63 @@
+buildscript {
+    repositories {
+        mavenCentral()
+    }
+    dependencies {
+        classpath('com.google.protobuf:protobuf-gradle-plugin:0.8.17')
+    }
+}
+
+apply plugin: 'java'
+apply plugin: 'com.google.protobuf'
+apply plugin: 'idea'
+
+group 'org.ps'
+version '0.1'
+
+def generatedSourcesDir = file('src/generated/main/java')
+sourceSets {
+    main {
+        proto {
+            // In addition to the default 'src/main/proto'
+            srcDir 'src/main/proto'
+            include '**/*.protodevel'
+        }
+
+        java {
+            srcDirs += [generatedSourcesDir]
+        }
+    }
+}
+
+protobuf {
+    protoc {
+        artifact = 'com.google.protobuf:protoc:3.17.3'
+    }
+    generatedFilesBaseDir = "$projectDir/src/generated"
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.zeromq:jeromq:0.5.2'
+    implementation 'org.slf4j:slf4j-api:1.7.32'
+    implementation 'com.google.protobuf:protobuf-java:3.17.3'
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.7.0'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.7.0'
+}
+
+ideaModule.dependsOn 'generateProto'
+idea {
+    module {
+        // For some reason, you need to add the generated sources dir to *both* sourceDirs and generatedSourceDirs
+        // in order for IDEA to mark it properly.
+        sourceDirs += generatedSourcesDir
+        generatedSourceDirs += generatedSourcesDir
+    }
+}
+
+test {
+    useJUnitPlatform()
+}

@@ -1,0 +1,17 @@
+build
+gradle
+.idea
+.gradle
+**/generated
+*.avro
+*.iml
+*.ipr
+*.iws
+*.orig
+*.rej
+*.sdf
+*.suo
+*.swp
+**/*.log
+target
+log
