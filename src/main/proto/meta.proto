@@ -2,7 +2,7 @@
  *  Copyright (c) 2015 by Contributors
  */
 syntax = "proto3";
-option java_package = "org.ps.proto.java";
+option java_package = "cn.daugraph.ps.proto.java";
 option java_outer_classname = "ParameterServerMeta";
 
 option optimize_for = LITE_RUNTIME;
@@ -46,7 +46,7 @@ message PBMeta {
   // the timestamp of this message
   optional int32 timestamp = 8;
   // data type of message.data[i]
-  repeated int32 data_type = 9 [packed=true];
+  repeated int32 data_type = 9 [packed = true];
   // the locally unique id of an customer
   optional int32 customer_id = 10;
   // whether or not a push message
