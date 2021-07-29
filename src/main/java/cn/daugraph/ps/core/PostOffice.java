@@ -1,6 +1,8 @@
 package cn.daugraph.ps.core;
 
+import cn.daugraph.ps.core.common.Constants;
 import cn.daugraph.ps.core.van.Van;
+import cn.daugraph.ps.core.van.ZmqVan;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
@@ -8,33 +10,24 @@ import java.util.List;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
-import cn.daugraph.ps.core.common.Consts;
-import cn.daugraph.ps.core.van.ZmqVan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class PostOffice {
 
-	private final Logger LOG = LoggerFactory.getLogger(PostOffice.class);
-
-	private static final PostOffice instance = new PostOffice();
-
-	private Van van;
-
-	private final Lock heartbeatLock = new ReentrantLock();
+    private static final PostOffice instance = new PostOffice();
+    private final Logger LOG = LoggerFactory.getLogger(PostOffice.class);
+    private final Lock heartbeatLock = new ReentrantLock();
     private final Lock barrierLock = new ReentrantLock();
     private final Lock customerLock = new ReentrantLock();
     private final Lock startLock = new ReentrantLock();
-
-	private final Condition barrierCond = barrierLock.newCondition();
-
-	private final HashMap<Integer, HashMap<Integer, Customer>> customers = new HashMap<>();
-	private final HashMap<Integer, HashMap<Integer, Boolean>> barrierDone = new HashMap<>();
-	private final HashMap<Integer, List<Integer>> nodeIds = new HashMap<>();
-	private final HashMap<Integer, Long> heartbeats = new HashMap<>();
-
-	private final List<Range> serverKeyRanges = new ArrayList<>();
-
+    private final Condition barrierCond = barrierLock.newCondition();
+    private final HashMap<Integer, HashMap<Integer, Customer>> customers = new HashMap<>();
+    private final HashMap<Integer, HashMap<Integer, Boolean>> barrierDone = new HashMap<>();
+    private final HashMap<Integer, List<Integer>> nodeIds = new HashMap<>();
+    private final HashMap<Integer, Long> heartbeats = new HashMap<>();
+    private final List<Range> serverKeyRanges = new ArrayList<>();
+    private Van van;
     private boolean isWorker;
     private boolean isServer;
     private boolean isScheduler;
@@ -49,16 +42,16 @@ public class PostOffice {
     private PostOffice() {
     }
 
-    public static PostOffice getInstance() {
+    public static PostOffice get() {
         return instance;
     }
 
     public void init() {
-    	LOG.info("start init PostOffice");
+        LOG.info("start init PostOffice");
         van = new ZmqVan();
-        numWorkers = Integer.parseInt(System.getenv(Consts.DMLC_NUM_WORKER));
-        numServers = Integer.parseInt(System.getenv(Consts.DMLC_NUM_SERVER));
-        String role = System.getenv(Consts.DMLC_ROLE);
+        numWorkers = Integer.parseInt(System.getenv(Constants.DMLC_NUM_WORKER));
+        numServers = Integer.parseInt(System.getenv(Constants.DMLC_NUM_SERVER));
+        String role = System.getenv(Constants.DMLC_ROLE);
         switch (role) {
             case "server":
                 isServer = true;
@@ -70,11 +63,20 @@ public class PostOffice {
                 isScheduler = true;
                 break;
         }
+
+        initStage = 0;
         LOG.info("num workers = {}, num servers = {}, role = {}", numWorkers, numServers, role);
     }
 
     public void start(int customerId) {
         this.start(customerId, true);
+    }
+
+    private void addNodeToGroup(int nodeId, int groupId) {
+        if (!nodeIds.containsKey(groupId)) {
+            nodeIds.put(groupId, new ArrayList<>());
+        }
+        nodeIds.get(groupId).add(nodeId);
     }
 
     public void start(int customerId, boolean doBarrier) {
@@ -84,24 +86,35 @@ public class PostOffice {
                 init();
 
                 for (int i = 0; i < numWorkers; ++i) {
-                    int id = workerRankToID(i);
-                    for (int g : new int[]{id, Consts.WORKER_GROUP, Consts.WORKER_GROUP + Consts.SERVER_GROUP,
-                            Consts.WORKER_GROUP + Consts.SCHEDULER, Consts.ALL_GROUP}) {
-                        nodeIds.get(g).add(id);
+                    int nodeId = workerRankToID(i);
+                    for (int groupId : new int[]{
+                            nodeId,
+                            Constants.WORKER_GROUP,
+                            Constants.WORKER_GROUP + Constants.SERVER_GROUP,
+                            Constants.WORKER_GROUP + Constants.SCHEDULER,
+                            Constants.ALL_GROUP}) {
+                        addNodeToGroup(nodeId, groupId);
                     }
                 }
 
                 for (int i = 0; i < numServers; ++i) {
-                    int id = serverRankToID(i);
-                    for (int g : new int[]{id, Consts.SERVER_GROUP, Consts.WORKER_GROUP + Consts.SERVER_GROUP,
-                            Consts.SERVER_GROUP + Consts.SCHEDULER, Consts.ALL_GROUP}) {
-                        nodeIds.get(g).add(id);
+                    int nodeId = serverRankToID(i);
+                    for (int groupId : new int[]{
+                            nodeId,
+                            Constants.SERVER_GROUP,
+                            Constants.SERVER_GROUP + Constants.WORKER_GROUP,
+                            Constants.SERVER_GROUP + Constants.SCHEDULER,
+                            Constants.ALL_GROUP}) {
+                        addNodeToGroup(nodeId, groupId);
                     }
                 }
 
-                for (int g : new int[]{Consts.SCHEDULER, Consts.SCHEDULER + Consts.WORKER_GROUP,
-                        Consts.SCHEDULER + Consts.SERVER_GROUP, Consts.ALL_GROUP}) {
-                    nodeIds.get(g).add(Consts.SCHEDULER);
+                for (int groupId : new int[]{
+                        Constants.SCHEDULER,
+                        Constants.SCHEDULER + Constants.WORKER_GROUP,
+                        Constants.SCHEDULER + Constants.SERVER_GROUP,
+                        Constants.ALL_GROUP}) {
+                    addNodeToGroup(Constants.SCHEDULER, groupId);
                 }
             }
         } finally {
@@ -132,6 +145,16 @@ public class PostOffice {
     // 8 10 12 14 ...
     public int serverRankToID(int i) {
         return i * 2 + 8;
+    }
+
+    public int rankToID(int i, Role role) {
+        switch (role) {
+            case WORKER:
+                return workerRankToID(i);
+            case SERVER:
+                return serverRankToID(i);
+        }
+        return Constants.SCHEDULER;
     }
 
     public int idToRank(int i) {
@@ -167,8 +190,8 @@ public class PostOffice {
             return deadNodes;
 
         long curTime = System.currentTimeMillis() / 1000;
-        List<Integer> nodes = isScheduler ? getNodeIds(Consts.WORKER_GROUP + Consts.SERVER_GROUP)
-                : getNodeIds(Consts.SCHEDULER);
+        List<Integer> nodes = isScheduler ? getNodeIds(Constants.WORKER_GROUP + Constants.SERVER_GROUP)
+                : getNodeIds(Constants.SCHEDULER);
         heartbeatLock.lock();
         try {
             for (int r : nodes) {
@@ -283,7 +306,7 @@ public class PostOffice {
 
     public void manage(Message msg) {
         Control ctrl = msg.getMeta().getControl();
-        if (ctrl.getCommand() == Control.Command.BARRIER && !msg.getMeta().isRequest()) {
+        if (ctrl.getCommand() == Command.BARRIER && !msg.getMeta().isRequest()) {
             barrierLock.lock();
             try {
                 int size = barrierDone.get(msg.getMeta().getAppId()).size();
@@ -300,22 +323,22 @@ public class PostOffice {
     public void barrier(int customerId, int nodeGroup) {
         if (getNodeIds(nodeGroup).size() <= 1)
             return;
-        Node.Role role = van.getMyNode().getRole();
-        if (role == Node.Role.SCHEDULER && (nodeGroup & Consts.SCHEDULER) == 0) {
+        Role role = van.getMyNode().getRole();
+        if (role == Role.SCHEDULER && (nodeGroup & Constants.SCHEDULER) == 0) {
             LOG.error("node group don't match, role: {}, group: {}", role, nodeGroup);
             return;
-        } else if (role == Node.Role.WORKER && (nodeGroup & Consts.WORKER_GROUP) == 0) {
+        } else if (role == Role.WORKER && (nodeGroup & Constants.WORKER_GROUP) == 0) {
             LOG.error("node group don't match, role: {}, group: {}", role, nodeGroup);
             return;
-        } else if (role == Node.Role.SERVER && (nodeGroup & Consts.SERVER_GROUP) == 0) {
+        } else if (role == Role.SERVER && (nodeGroup & Constants.SERVER_GROUP) == 0) {
             LOG.error("node group don't match, role: {}, group: {}", role, nodeGroup);
             return;
         }
         barrierLock.lock();
         try {
             barrierDone.get(0).put(customerId, false);
-            Control control = new Control(Control.Command.BARRIER, nodeGroup, new ArrayList<>(), 0);
-            Meta meta = new Meta.Builder().setRecver(Consts.SCHEDULER).setRequest(true).setAppId(0)
+            Control control = new Control(Command.BARRIER, nodeGroup, new ArrayList<>(), 0);
+            Meta meta = new Meta.Builder().setRecver(Constants.SCHEDULER).setRequest(true).setAppId(0)
                     .setCustomerId(customerId).setTimestamp(van.getNextTimestamp()).setControl(control).build();
             van.send(new Message(meta));
             while (!barrierDone.get(0).get(customerId)) {
@@ -333,7 +356,7 @@ public class PostOffice {
 
     public void finalize(int customerId, boolean doBarrier) {
         if (doBarrier) {
-            barrier(customerId, Consts.ALL_GROUP);
+            barrier(customerId, Constants.ALL_GROUP);
         }
     }
 }

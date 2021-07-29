@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
+import zmq.Msg;
 
 public class ZmqTest {
     /**
@@ -26,4 +27,29 @@ public class ZmqTest {
             }
         }
     }
+
+    @Test
+    public void testRouterServer() {
+        ZMQ.Context context = ZMQ.context(1);
+        context.setMaxSockets(65536);
+        ZMQ.Socket socket = context.socket(SocketType.ROUTER);
+        socket.bind("tcp://*:5555");
+
+        while (!Thread.currentThread().isInterrupted()) {
+            Msg zmqMsg = socket.base().recv(0);
+            System.out.println(zmqMsg);
+            System.out.println(new String(zmqMsg.data()));
+        }
+    }
+
+    @Test
+    public void testDealerClient() {
+        ZMQ.Context context = ZMQ.context(1);
+        ZMQ.Socket sender = context.socket(SocketType.DEALER);
+        // String identity = "ps1";
+        // sender.setIdentity(identity.getBytes());
+        sender.connect("tcp://localhost:5555");
+        sender.send("hello \nworld");
+    }
+
 }

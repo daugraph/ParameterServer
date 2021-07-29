@@ -1,11 +1,11 @@
 package cn.daugraph.ps.core.van;
 
-import java.util.Date;
-import java.util.HashMap;
-import java.util.Random;
 import cn.daugraph.ps.core.Message;
 import cn.daugraph.ps.core.Meta;
 import cn.daugraph.ps.core.Node;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Random;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.zeromq.SocketType;
@@ -16,9 +16,14 @@ import static zmq.ZMQ.ZMQ_SNDMORE;
 public class ZmqVan extends Van {
 
     private final Logger LOG = LoggerFactory.getLogger(ZmqVan.class);
+
     private final HashMap<Integer, ZMQ.Socket> senders = new HashMap<>();
+
     private ZMQ.Context context;
     private ZMQ.Socket receiver;
+
+    public ZmqVan() {
+    }
 
     @Override
     public void start(int customerId) {
@@ -54,7 +59,8 @@ public class ZmqVan extends Van {
     public int bind(Node node, int maxRetry) {
         receiver = context.socket(SocketType.ROUTER);
         boolean isLocal = Boolean.parseBoolean(System.getenv("DMLC_LOCAL"));
-        String hostname = node.getHostname() == null ? "*" : node.getHostname();
+        // String hostname = node.getHostname() == null ? "*" : node.getHostname();
+        String hostname = "*";
         String addr = isLocal ? "ipc:///tmp/" : "tcp://" + hostname + ":";
 
         int port = node.getPort();
@@ -81,12 +87,12 @@ public class ZmqVan extends Van {
             senders.get(id).close();
         }
         // worker doesn't need to connect to the other workers. same for server
-        if ((node.getRole() == getMyNode().getRole()) && (!node.getId().equals(getMyNode().getId()))) {
+        if (node.getRole() == getMyNode().getRole() && node.getId() != getMyNode().getId()) {
             return;
         }
 
         ZMQ.Socket sender = context.socket(SocketType.DEALER);
-        if (getMyNode().getId() != null) {
+        if (getMyNode().getId() != -1) {
             String myId = "ps" + getMyNode().getId();
             sender.setIdentity(myId.getBytes());
             String watermark = System.getenv("DMLC_PS_WATER_MARK");
@@ -109,9 +115,11 @@ public class ZmqVan extends Van {
     }
 
     @Override
-    public synchronized int sendMsg(Message message) {
+    public int sendMsg(Message message) {
+        LOG.info("start sendMsg ...");
         int id = message.getMeta().getRecver();
         ZMQ.Socket socket = senders.get(id);
+        LOG.info("Peer id : {}, socket: {}", id, socket);
         String meta = packMeta(message.getMeta());
         int tag = ZMQ_SNDMORE;
         if (message.getData().size() == 0) {
@@ -135,28 +143,29 @@ public class ZmqVan extends Van {
     }
 
     @Override
-    public synchronized int recvMsg(Message message) {
-        byte[] buf;
-        int ret = 0;
-        for (int i = 0; ; i++) {
-            Msg msg = receiver.base().recv(0);
-            buf = msg.data();
-            ret += buf.length;
-            if (i == 0) {
-                Integer id = getNodeID(new String(buf));
-                message.getMeta().setSender(id);
-                message.getMeta().setRecver(getMyNode().getId());
-            } else if (i == 1) {
-                Meta meta = unpackMeta(buf);
-                message.setMeta(meta);
-                if (!msg.hasMore())
-                    break;
+    public synchronized Message recvMsg() {
+        byte[] zmqBuffer;
+        Message psMsg = new Message();
+        int id = -1;
+        for (int stage = 0; ; stage++) {
+            Msg zmqMsg = receiver.base().recv(0);
+            LOG.info("{} recv message : {}, \n with data:\n {} \n", myNode, zmqMsg, new String(zmqMsg.data()));
+            zmqBuffer = zmqMsg.data();
+
+            if (stage == 0) {
+                id = getNodeID(new String(zmqBuffer));
+            } else if (stage == 1) {
+                Meta meta = unpackMeta(zmqBuffer);
+                meta.setSender(id);
+                meta.setRecver(myNode.getId());
+                psMsg.setMeta(meta);
+                if (!zmqMsg.hasMore()) break;
             } else {
-                message.getData().add(buf);
-                if (!msg.hasMore())
-                    break;
+                psMsg.getData().add(zmqBuffer);
+                if (!zmqMsg.hasMore()) break;
             }
         }
-        return ret;
+
+        return psMsg;
     }
 }

@@ -1,12 +1,12 @@
 package cn.daugraph.ps;
 
-import java.util.ArrayList;
-import java.util.List;
 import cn.daugraph.ps.app.SimpleApp;
 import cn.daugraph.ps.app.SimpleData;
 import cn.daugraph.ps.app.SimpleHandler;
 import cn.daugraph.ps.core.PostOffice;
-import cn.daugraph.ps.core.common.Consts;
+import cn.daugraph.ps.core.common.Constants;
+import java.util.ArrayList;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,17 +16,17 @@ public class Bootstrap {
 
     public static void main(String[] args) {
         LOG.info("start Parameter Server ...");
-        PostOffice ps = PostOffice.getInstance();
+        PostOffice po = PostOffice.get();
         int n = 100;
-        ps.start(0);
+        po.start(0);
         SimpleApp app = new SimpleApp(0, 0);
         SimpleHandler handler = new RequestHandler();
         app.setRequestHandler(handler);
 
-        if (ps.isScheduler()) {
+        if (po.isScheduler()) {
             List<Integer> ts = new ArrayList<>();
             for (int i = 0; i < n; i++) {
-                int recver = Consts.ALL_GROUP;
+                int recver = Constants.ALL_GROUP;
                 ts.add(app.request(1, "test", recver));
             }
 
@@ -35,7 +35,7 @@ public class Bootstrap {
             }
         }
 
-        ps.finalize(0, true);
+        po.finalize(0, true);
 
         if (handler.getCounter() != n) {
             LOG.error("Test failed, counter = {}, n = {}", handler.getCounter(), n);
@@ -49,7 +49,7 @@ public class Bootstrap {
 
         @Override
         public void process(SimpleData data, SimpleApp app) {
-            LOG.info("process simple data: {}", data);
+            LOG.info("process simple app data: {}", data);
             counter++;
         }
 

@@ -5,11 +5,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class Message {
-    private Meta meta;
+    private Meta meta = new Meta();
     private List<byte[]> data = new ArrayList<>();
 
-    public Message() {
-    }
+    public Message() { }
 
     public Message(Meta meta) {
         this.meta = meta;
@@ -34,5 +33,13 @@ public class Message {
 
     public void setData(List<byte[]> data) {
         this.data = data;
+    }
+
+    @Override
+    public String toString() {
+        return "Message{" +
+                "meta=" + meta +
+                ", data=" + data +
+                '}';
     }
 }
