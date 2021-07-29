@@ -1,10 +1,10 @@
 package cn.daugraph.ps.app;
 
 import cn.daugraph.ps.core.Customer;
-import cn.daugraph.ps.core.PostOffice;
-import cn.daugraph.ps.core.handler.RecvHandler;
 import cn.daugraph.ps.core.Message;
 import cn.daugraph.ps.core.Meta;
+import cn.daugraph.ps.core.PostOffice;
+import cn.daugraph.ps.core.handler.RecvHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -51,20 +51,33 @@ public class SimpleApp implements RecvHandler {
     }
 
     public void response(SimpleData req, String body) {
-        Meta meta = new Meta.Builder().setHead(req.getHead()).setBody(body).setTimestamp(req.getTimestamp())
-                .setRequest(false).setSimpleApp(true).setAppId(customer.getAppId()).setCustomerId(req.getCustomerId())
-                .setRecver(req.getSender()).build();
-        PostOffice.getInstance().getVan().send(new Message(meta));
+        Meta meta = new Meta.Builder()
+                .setHead(req.getHead())
+                .setBody(body)
+                .setTimestamp(req.getTimestamp())
+                .setRequest(false)
+                .setSimpleApp(true)
+                .setAppId(customer.getAppId())
+                .setCustomerId(req.getCustomerId())
+                .setRecver(req.getSender())
+                .build();
+        PostOffice.get().getVan().send(new Message(meta));
     }
 
     public int request(int reqHead, String reqBody, int recvId) {
-        Meta meta = new Meta.Builder().setHead(reqHead).setBody(reqBody).setTimestamp(customer.newRequest(recvId))
-                .setRequest(true).setSimpleApp(true).setAppId(customer.getAppId())
-                .setCustomerId(customer.getCustomerId()).build();
+        Meta meta = new Meta.Builder()
+                .setHead(reqHead)
+                .setBody(reqBody)
+                .setTimestamp(customer.newRequest(recvId))
+                .setRequest(true)
+                .setSimpleApp(true)
+                .setAppId(customer.getAppId())
+                .setCustomerId(customer.getCustomerId())
+                .build();
         Message msg = new Message(meta);
-        for (int r : PostOffice.getInstance().getNodeIds(recvId)) {
+        for (int r : PostOffice.get().getNodeIds(recvId)) {
             msg.getMeta().setRecver(r);
-            PostOffice.getInstance().getVan().send(msg);
+            PostOffice.get().getVan().send(msg);
         }
 
         return meta.getTimestamp();

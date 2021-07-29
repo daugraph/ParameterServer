@@ -47,7 +47,7 @@ public class Meta {
         this.priority = priority;
     }
 
-    public Meta(Control.Command terminate) {
+    public Meta(Command terminate) {
         this.getControl().setCommand(terminate);
     }
 

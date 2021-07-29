@@ -1,10 +1,13 @@
 package cn.daugraph.ps.core;
 
 import cn.daugraph.ps.core.handler.RecvHandler;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -22,8 +25,8 @@ public class Customer {
     private final RecvHandler handler;
     private final Lock lock = new ReentrantLock();
     private final Condition cond = lock.newCondition();
-    private BlockingQueue<Message> queue;
-    private List<int[]> tracker;
+    private final BlockingQueue<Message> queue = new LinkedBlockingDeque<>();
+    private List<int[]> tracker = new ArrayList<>();
 
     public Customer(int appId, int customerId, RecvHandler handler) {
         this.appId = appId;
@@ -34,7 +37,7 @@ public class Customer {
     public int newRequest(int recver) {
         lock.lock();
         try {
-            int num = PostOffice.getInstance().getNodeIds(recver).size();
+            int num = PostOffice.get().getNodeIds(recver).size();
             tracker.add(new int[]{num, 0});
             // 这里返回的newRequest对应的下标
             return tracker.size() - 1;
@@ -76,7 +79,7 @@ public class Customer {
 
     public Customer createCustomer(int appId, int customerId, RecvHandler handler) {
         Customer customer = new Customer(appId, customerId, handler);
-        PostOffice.getInstance().addCustomer(customer);
+        PostOffice.get().addCustomer(customer);
         es.execute(new RecvThread());
         return customer;
     }
@@ -91,14 +94,6 @@ public class Customer {
 
     public int getCustomerId() {
         return customerId;
-    }
-
-    public BlockingQueue<Message> getQueue() {
-        return queue;
-    }
-
-    public void setQueue(BlockingQueue<Message> queue) {
-        this.queue = queue;
     }
 
     public List<int[]> getTracker() {
@@ -122,7 +117,7 @@ public class Customer {
                     // Get message from queue
                     Message message = queue.take();
                     if (!message.getMeta().getControl().isEmpty()
-                            && message.getMeta().getControl().getCommand() == Control.Command.TERMINATE) {
+                            && message.getMeta().getControl().getCommand() == Command.TERMINATE) {
                         break;
                     }
                     // Process message

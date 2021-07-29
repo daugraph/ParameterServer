@@ -1,8 +1,8 @@
 package cn.daugraph.ps.core.common;
 
+import cn.daugraph.ps.core.DataType;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
-import cn.daugraph.ps.core.DataType;
 
 public class Utils {
 
