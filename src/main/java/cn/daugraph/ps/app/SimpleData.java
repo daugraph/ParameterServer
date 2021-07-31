@@ -46,4 +46,15 @@ public class SimpleData {
     public void setCustomerId(int customerId) {
         this.customerId = customerId;
     }
+
+    @Override
+    public String toString() {
+        return "SimpleData{" +
+                "head=" + head +
+                ", body='" + body + '\'' +
+                ", sender=" + sender +
+                ", timestamp=" + timestamp +
+                ", customerId=" + customerId +
+                '}';
+    }
 }

@@ -3,10 +3,13 @@ package cn.daugraph.ps.core.common;
 import cn.daugraph.ps.core.DataType;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.util.Map;
 
 public class Utils {
 
     public static final int BYTES = 8;
+
+    public static final Map<String, String> envs = System.getenv();
 
     public static <T> byte[] convertToByteArray(DataType dataType, final T[] array) {
         ByteBuffer bb = ByteBuffer.allocate(array.length * BYTES);
@@ -35,4 +38,19 @@ public class Utils {
         }
         return ret;
     }
+
+    public static int loadIntegerFromEnvironment(String key, int defaultValue) {
+        if (envs.containsKey(key)) {
+            return Integer.parseInt(envs.get(key));
+        }
+        return defaultValue;
+    }
+
+    public static String loadStringFromEnvironment(String key, String defaultValue) {
+        if (envs.containsKey(key)) {
+            return envs.get(key);
+        }
+        return defaultValue;
+    }
+
 }

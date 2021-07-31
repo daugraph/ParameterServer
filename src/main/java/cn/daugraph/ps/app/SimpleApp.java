@@ -20,6 +20,7 @@ public class SimpleApp implements RecvHandler {
 
     public SimpleApp(int appId, int customerId) {
         customer = new Customer(appId, customerId, this);
+        PostOffice.get().addCustomer(customer);
     }
 
     public Customer getCustomer() {
@@ -39,11 +40,7 @@ public class SimpleApp implements RecvHandler {
     }
 
     public void wait(int timestamp) {
-        try {
-            customer.wait(timestamp);
-        } catch (InterruptedException e) {
-            LOG.error("SimpleApp interrupted while waiting ..");
-        }
+        customer.waitRequest(timestamp);
     }
 
     public void response(SimpleData req) {
@@ -64,23 +61,26 @@ public class SimpleApp implements RecvHandler {
         PostOffice.get().getVan().send(new Message(meta));
     }
 
-    public int request(int reqHead, String reqBody, int recvId) {
-        Meta meta = new Meta.Builder()
-                .setHead(reqHead)
-                .setBody(reqBody)
-                .setTimestamp(customer.newRequest(recvId))
-                .setRequest(true)
-                .setSimpleApp(true)
-                .setAppId(customer.getAppId())
-                .setCustomerId(customer.getCustomerId())
-                .build();
-        Message msg = new Message(meta);
-        for (int r : PostOffice.get().getNodeIds(recvId)) {
-            msg.getMeta().setRecver(r);
-            PostOffice.get().getVan().send(msg);
+    // 向目标组发送信息
+    public int request(int reqHead, String reqBody, int targetGroup) {
+        // tracker id 用于追踪请求处理状况
+        int trackerId = customer.newRequest(targetGroup);
+        LOG.info("Create request successfully, tracker/timestamp id is: {}", trackerId);
+        for (int nodeId : PostOffice.get().getNodeIds(targetGroup)) {
+            Meta meta = new Meta.Builder()
+                    .setHead(reqHead)
+                    .setBody(reqBody)
+                    .setTimestamp(trackerId)
+                    .setRequest(true)
+                    .setSimpleApp(true)
+                    .setAppId(customer.getAppId())
+                    .setCustomerId(customer.getCustomerId())
+                    .setRecver(nodeId)
+                    .build();
+            PostOffice.get().getVan().send(new Message(meta));
         }
-
-        return meta.getTimestamp();
+        LOG.info("Send message to group {} successfully", targetGroup);
+        return trackerId;
     }
 
     @Override
@@ -98,13 +98,17 @@ public class SimpleApp implements RecvHandler {
         }
     }
 
+    public void initialize() {
+        customer.initialize();
+    }
+
     private static class DefaultRequestSimpleHandler implements SimpleHandler {
 
         public static final Logger LOG = LoggerFactory.getLogger(DefaultRequestSimpleHandler.class);
 
         @Override
         public void process(SimpleData data, SimpleApp app) {
-            LOG.info("process simple data: {}", data);
+            LOG.info("Handle simple data: {}", data);
         }
     }
 
@@ -114,7 +118,7 @@ public class SimpleApp implements RecvHandler {
 
         @Override
         public void process(SimpleData data, SimpleApp app) {
-            LOG.info("process simple data: {}", data);
+            LOG.info("Handle simple data: {}", data);
         }
     }
 }

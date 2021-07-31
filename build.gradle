@@ -47,8 +47,6 @@ dependencies {
 ideaModule.dependsOn 'generateProto'
 idea {
     module {
-        // For some reason, you need to add the generated sources dir to *both* sourceDirs and generatedSourceDirs
-        // in order for IDEA to mark it properly.
         sourceDirs += generatedSourcesDir
         generatedSourceDirs += generatedSourcesDir
     }

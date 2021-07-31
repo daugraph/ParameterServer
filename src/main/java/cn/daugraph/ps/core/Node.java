@@ -37,8 +37,8 @@ public class Node implements Comparable<Node> {
 
     @Override
     public String toString() {
-        return "Node{" + "role=" + role + ", id=" + id + ", hostname='" + hostname + '\'' + ", port=" + port
-                + ", customerId=" + customerId + ", isRecovery=" + isRecovery + '}';
+        return "[" + role + ", " + id + ", " + hostname + ":" + port
+                + ", " + customerId + ", " + isRecovery + "]";
     }
 
     public boolean isRecovery() {
@@ -98,6 +98,24 @@ public class Node implements Comparable<Node> {
         if (hostname.equals(other.hostname))
             return port - other.port;
         return hostname.compareTo(other.hostname);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+
+        Node node = (Node) o;
+
+        if (port != node.port) return false;
+        return hostname.equals(node.hostname);
+    }
+
+    @Override
+    public int hashCode() {
+        int result = hostname.hashCode();
+        result = 31 * result + port;
+        return result;
     }
 
     public static class Builder {

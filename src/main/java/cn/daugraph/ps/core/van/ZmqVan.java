@@ -116,21 +116,22 @@ public class ZmqVan extends Van {
 
     @Override
     public int sendMsg(Message message) {
-        LOG.info("start sendMsg ...");
         int id = message.getMeta().getRecver();
         ZMQ.Socket socket = senders.get(id);
-        LOG.info("Peer id : {}, socket: {}", id, socket);
-        String meta = packMeta(message.getMeta());
+        String data = packMeta(message.getMeta());
         int tag = ZMQ_SNDMORE;
         if (message.getData().size() == 0) {
             tag = 0;
         }
-        if (!socket.send(meta, tag)) {
-            LOG.error("Failed to send meta info: {}", meta);
+
+        LOG.info("Prepare send data to node: {}, use socket: {}, data:\n{}", id, socket, data);
+
+        if (!socket.send(data, tag)) {
+            LOG.error("Failed to send data: {}", data);
             return -1;
         }
 
-        int ret = meta.getBytes().length;
+        int ret = data.getBytes().length;
         for (byte[] feat : message.getData()) {
             if (!socket.send(feat, tag)) {
                 LOG.error("Failed to send data: {}", feat);
@@ -144,24 +145,28 @@ public class ZmqVan extends Van {
 
     @Override
     public synchronized Message recvMsg() {
-        byte[] zmqBuffer;
+        byte[] buffer;
         Message psMsg = new Message();
         int id = -1;
         for (int stage = 0; ; stage++) {
             Msg zmqMsg = receiver.base().recv(0);
-            LOG.info("{} recv message : {}, \n with data:\n {} \n", myNode, zmqMsg, new String(zmqMsg.data()));
-            zmqBuffer = zmqMsg.data();
-
             if (stage == 0) {
-                id = getNodeID(new String(zmqBuffer));
+                LOG.info("Recv message: {}, data: {}", zmqMsg, zmqMsg.data());
+            } else {
+                LOG.info("Recv message: {}, data:\n{}", zmqMsg, new String(zmqMsg.data()));
+
+            }
+            buffer = zmqMsg.data();
+            if (stage == 0) {
+                id = getNodeID(buffer);
             } else if (stage == 1) {
-                Meta meta = unpackMeta(zmqBuffer);
+                Meta meta = unpackMeta(buffer);
                 meta.setSender(id);
                 meta.setRecver(myNode.getId());
                 psMsg.setMeta(meta);
                 if (!zmqMsg.hasMore()) break;
             } else {
-                psMsg.getData().add(zmqBuffer);
+                psMsg.getData().add(buffer);
                 if (!zmqMsg.hasMore()) break;
             }
         }
