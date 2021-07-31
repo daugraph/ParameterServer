@@ -5,8 +5,8 @@ import java.util.List;
 
 public final class Control {
 
-    private Command command;
     private final List<Node> nodes;
+    private Command command;
     private int barrierGroup;
     private long msgSig;
 
@@ -59,7 +59,6 @@ public final class Control {
     boolean isEmpty() {
         return command == Command.EMPTY;
     }
-
 
 
     public static class Builder {

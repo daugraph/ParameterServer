@@ -10,9 +10,11 @@ import cn.daugraph.ps.core.Node;
 import cn.daugraph.ps.core.PostOffice;
 import cn.daugraph.ps.core.Role;
 import cn.daugraph.ps.core.common.Constants;
+import cn.daugraph.ps.core.common.Utils;
 import cn.daugraph.ps.proto.java.ParameterServerMeta;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.TextFormat;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -38,38 +40,35 @@ public abstract class Van {
     private final Node scheduler = new Node(Role.SCHEDULER);
     private final HashMap<String, Integer> connectedNodes = new HashMap<>();
     private final HashMap<Integer, Integer> sharedNodeMapping = new HashMap<>();
+    private final ExecutorService es = Executors.newFixedThreadPool(2);
+    private final int recvBytes = 0;
     protected Lock startLock = new ReentrantLock();
     protected Node myNode;
-    private ExecutorService es;
     private int heartbeatTimeout;
     private ZContext context;
-    private HashMap<Integer, ZMQ.Socket> senders;
-    private AtomicBoolean ready = new AtomicBoolean(false);
+    private final HashMap<Integer, ZMQ.Socket> senders = new HashMap<>();
+    private final AtomicBoolean ready = new AtomicBoolean(false);
     private int numServers;
     private int numWorkers;
     private int[] barrierCount;
     private int initStage = 0;
     private boolean isScheduler;
-    private int recvBytes = 0;
 
     public void processTerminateCommand() {
         LOG.info("{} is stopped", myNode);
         ready.set(false);
     }
 
-    public void processAddNodeCommandAtScheduler(Message msg, Meta nodes, Meta recoveryNodes) {
-        LOG.info("Call processAddNodeCommandAtScheduler:");
-        LOG.info("msg: {}", msg);
-        LOG.info("nodes: {}", nodes);
-        LOG.info("recoveryNodes: {}", recoveryNodes);
+    public void processAddNodeCommandAtScheduler(Message message, List<Node> registeredNodes, Meta recoveryMeta) {
+        LOG.info("Current Message: {}", message);
+        LOG.info("Registered Nodes: {}", registeredNodes);
+        LOG.info("Recovery Nodes: {}", recoveryMeta);
 
-        recoveryNodes.getControl().setCommand(Command.ADD_NODE);
-        long t = System.currentTimeMillis() / 1000;
+        long ts = System.currentTimeMillis() / 1000;
 
-        int numNodes = PostOffice.get().getNumServers() + PostOffice.get().getNumWorkers();
-        List<Node> registeredNodes = nodes.getControl().getNodes();
+        int totalNodes = PostOffice.get().getNumServers() + PostOffice.get().getNumWorkers();
         // 收到全部节点注册后，给节点分配 node id
-        if (registeredNodes.size() == numNodes) {
+        if (registeredNodes.size() == totalNodes) {
             Collections.sort(registeredNodes);
             for (Node registeredNode : registeredNodes) {
                 String address = registeredNode.getAddress();
@@ -79,8 +78,9 @@ public abstract class Van {
                 if (!connectedNodes.containsKey(address)) {
                     registeredNode.setId(allocatedNodeId);
                     connect(registeredNode);
-                    PostOffice.get().updateHeartbeat(registeredNode.getId(), t);
+                    PostOffice.get().updateHeartbeat(registeredNode.getId(), ts);
                     // Mapping (address -> node id)
+                    LOG.info("Allocated id {} for {}", allocatedNodeId, address);
                     connectedNodes.put(address, allocatedNodeId);
                 } else {
                     // 如果相同的 hostname:port 已经有 node id, 则后继 node 使用相同 node id
@@ -94,39 +94,54 @@ public abstract class Van {
                     numWorkers++;
             }
 
-            // 把当前节点(也就是 scheduler 节点)加入已注册节点集合中
-            registeredNodes.add(myNode);
-            nodes.getControl().setCommand(Command.ADD_NODE);
-
-            Message response = new Message();
-            response.setMeta(nodes);
-            // 给所有 worker + server 节点回复
-            for (int r : PostOffice.get().getNodeIds(Constants.SERVER_WORKER_GROUP)) {
-                if (!sharedNodeMapping.containsKey(r)) {
-                    response.getMeta().setRecver(r);
-                    response.getMeta().setTimestamp(timestamp.getAndAdd(1));
-                    send(response);
+            // 把当前节点也就是 SCHEDULER 节点加入已注册节点集合中, 给所有 SERVER + WORKER 节点回复 ADD_NODE
+            List<Node> allNodes = new ArrayList<>(registeredNodes);
+            allNodes.add(myNode);
+            Control control = new Control.Builder()
+                    .setCommand(Command.ADD_NODE)
+                    .setNodes(allNodes)
+                    .build();
+            for (int nodeId : PostOffice.get().getNodeIds(Constants.GROUP_WORKER_SERVER)) {
+                if (!sharedNodeMapping.containsKey(nodeId)) {
+                    Meta meta = new Meta.Builder()
+                            .setControl(control)
+                            .setRecver(nodeId)
+                            .setTimestamp(timestamp.getAndIncrement())
+                            .build();
+                    send(new Message(meta));
                 }
             }
-            LOG.info("The scheduler is connected to {} workers and {} servers", numWorkers, numServers);
+            LOG.info("Scheduler is connected to {} workers and {} servers", numWorkers, numServers);
+            // SCHEDULER 节点就绪
             ready.set(true);
-        } else if (!recoveryNodes.getControl().getNodes().isEmpty()) {
-            Set<Integer> deadNodes = new HashSet<>(PostOffice.get().getDeadNodes(heartbeatTimeout));
-            List<Node> rNodes = recoveryNodes.getControl().getNodes();
-            if (rNodes.size() == 1) {
-                connect(rNodes.get(0));
-                PostOffice.get().updateHeartbeat(rNodes.get(0).getId(), t);
-                for (int r : PostOffice.get().getNodeIds(Constants.WORKER_GROUP + Constants.SERVER_GROUP)) {
-                    if (r != rNodes.get(0).getId() && deadNodes.contains(r)) {
-                        continue;
-                    }
-                    Message back = new Message();
-                    back.setMeta(r == rNodes.get(0).getId() ? nodes : recoveryNodes);
-                    back.getMeta().setRecver(r);
-                    back.getMeta().setTimestamp(timestamp.getAndIncrement());
-                    send(back);
-                }
+            return;
+        }
+
+        // 恢复节点
+        List<Node> recoveryNodes = recoveryMeta.getControl().getNodes();
+        recoveryMeta.getControl().setCommand(Command.ADD_NODE);
+        if (recoveryNodes.size() != 1) {
+            LOG.error("Bad recovery meta : {}", recoveryMeta);
+            return;
+        }
+
+        Node recoveryNode = recoveryNodes.get(0);
+        Set<Integer> deadNodes = new HashSet<>(PostOffice.get().getDeadNodes(heartbeatTimeout));
+        connect(recoveryNode);
+        PostOffice.get().updateHeartbeat(recoveryNode.getId(), ts);
+        for (int node : PostOffice.get().getNodeIds(Constants.GROUP_WORKER_SERVER)) {
+            if (node != recoveryNode.getId() && deadNodes.contains(node)) {
+                continue;
             }
+            Control control = new Control.Builder()
+                    .setNodes(node == recoveryNode.getId() ? registeredNodes : recoveryNodes)
+                    .build();
+            Meta meta = new Meta.Builder()
+                    .setControl(control)
+                    .setRecver(node)
+                    .setTimestamp(timestamp.getAndIncrement())
+                    .build();
+            send(new Message(meta));
         }
     }
 
@@ -134,32 +149,34 @@ public abstract class Van {
 
     private void processBarrierCommand(Message msg) {
         Control ctrl = msg.getMeta().getControl();
-        if (msg.getMeta().isRequest()) {
-            if (barrierCount == null) {
-                barrierCount = new int[8];
-            }
-            int group = ctrl.getBarrierGroup();
-            ++barrierCount[group];
+        if (!msg.getMeta().isRequest()) {
+            PostOffice.get().manage(msg);
+            return;
+        }
 
-            LOG.info("Barrier count for {} : {}", group, barrierCount[group]);
+        // 接受来自其他节点的 BARRIER COMMAND 指令
+        if (barrierCount == null) {
+            barrierCount = new int[8];
+        }
+        int group = ctrl.getBarrierGroup();
+        ++barrierCount[group];
 
-            if (barrierCount[group] == PostOffice.get().getNodeIds(group).size()) {
-                barrierCount[group] = 0;
-                Message res = new Message();
-                res.getMeta().setRequest(false);
-                res.getMeta().setAppId(msg.getMeta().getAppId());
-                res.getMeta().setCustomerId(msg.getMeta().getCustomerId());
-                res.getMeta().getControl().setCommand(Command.BARRIER);
-                for (int r : PostOffice.get().getNodeIds(group)) {
-                    if (!sharedNodeMapping.containsKey(r)) {
-                        res.getMeta().setRecver(r);
-                        res.getMeta().setTimestamp(timestamp.getAndIncrement());
-                        send(msg);
-                    }
+        LOG.info("Barrier count for {} : {}", group, barrierCount[group]);
+
+        if (barrierCount[group] == PostOffice.get().getNodeIds(group).size()) {
+            barrierCount[group] = 0;
+            Message res = new Message();
+            res.getMeta().setRequest(false);
+            res.getMeta().setAppId(msg.getMeta().getAppId());
+            res.getMeta().setCustomerId(msg.getMeta().getCustomerId());
+            res.getMeta().getControl().setCommand(Command.BARRIER);
+            for (int r : PostOffice.get().getNodeIds(group)) {
+                if (!sharedNodeMapping.containsKey(r)) {
+                    res.getMeta().setRecver(r);
+                    res.getMeta().setTimestamp(timestamp.getAndIncrement());
+                    send(msg);
                 }
             }
-        } else {
-            PostOffice.get().manage(msg);
         }
     }
 
@@ -183,13 +200,15 @@ public abstract class Van {
     }
 
     public void start(int customerId) {
-        heartbeatTimeout = Integer.parseInt(System.getenv(Constants.PS_HEARTBEAT_TIMEOUT));
-        ExecutorService es = Executors.newFixedThreadPool(2);
+        heartbeatTimeout = Utils.loadIntegerFromEnvironment(Constants.PS_HEARTBEAT_TIMEOUT,
+                Constants.DEFAULT_PS_HEARTBEAT_TIMEOUT);
         startLock.lock();
         try {
             if (initStage == 0) {
-                scheduler.setHostname(System.getenv(Constants.DMLC_PS_ROOT_URI));
-                scheduler.setPort(Integer.parseInt(System.getenv(Constants.DMLC_PS_ROOT_PORT)));
+                scheduler.setHostname(Utils.loadStringFromEnvironment(Constants.DMLC_PS_ROOT_URI,
+                        Constants.DEFAULT_DMLC_PS_ROOT_URI));
+                scheduler.setPort(Utils.loadIntegerFromEnvironment(Constants.DMLC_PS_ROOT_PORT,
+                        Constants.DEFAULT_DMLC_PS_ROOT_PORT));
                 scheduler.setRole(Role.SCHEDULER);
                 scheduler.setId(Constants.SCHEDULER);
                 isScheduler = PostOffice.get().isScheduler();
@@ -199,7 +218,8 @@ public abstract class Van {
                     myNode = new Node(scheduler);
                 } else {
                     Role role = PostOffice.get().isWorker() ? Role.WORKER : Role.SERVER;
-                    String hostname = System.getenv(Constants.DMLC_NODE_HOST);
+                    String hostname = Utils.loadStringFromEnvironment(Constants.DMLC_NODE_HOST,
+                            Constants.DEFAULT_DMLC_NODE_HOST);
                     int port = Integer.parseInt(System.getenv(Constants.DMLC_NODE_PORT));
                     myNode = new Node(role, hostname, port, -1, customerId, false);
                 }
@@ -236,20 +256,21 @@ public abstract class Van {
                     .setSender(-1)
                     .build();
             Message msg = new Message(meta);
-            LOG.info("Prepare send message: {}", msg);
+            LOG.info("Prepare message: {}", msg);
             send(msg);
-            LOG.info("After send message: {}", msg);
+            LOG.info("Send message succeed");
         }
 
-        // busing wait ready
+        // 等待所有节点注册过来
         while (!ready.get()) {
             try {
                 Thread.sleep(5000);
-                LOG.info("{} sleep five seconds", myNode);
+                LOG.info("Waiting to be ready ...");
             } catch (InterruptedException e) {
                 LOG.error("Interrupted while waiting for ready, {}", e.getMessage());
             }
         }
+
 
         startLock.lock();
         try {
@@ -264,6 +285,9 @@ public abstract class Van {
         } finally {
             startLock.unlock();
         }
+
+        LOG.info("Van launch successful ...");
+
     }
 
     public void stop() {
@@ -301,7 +325,6 @@ public abstract class Van {
     protected abstract int bind(Node node, int maxRetry);
 
     String packMeta(Meta meta) {
-        LOG.info("Packing meta: {}", meta);
         ParameterServerMeta.PBMeta.Builder mBuilder = ParameterServerMeta.PBMeta.newBuilder()
                 .setHead(meta.getHead());
         if (meta.getAppId() != -1)
@@ -386,21 +409,16 @@ public abstract class Van {
         return meta;
     }
 
-    int getNodeID(String buf) {
-        LOG.info("buf: {}", buf);
+    int getNodeID(byte[] buffer) {
         int id = -1;
-        if (buf.startsWith("ps")) {
+        if (buffer[0] == 'p' && buffer[1] == 's') {
             try {
-                id = Integer.parseInt(buf.substring(2));
+                id = Integer.parseInt(new String(buffer).substring(2));
             } catch (NumberFormatException e) {
                 LOG.error("Failed to parse node id from buf: ", e);
             }
         }
         return id;
-    }
-
-    int recv(Message msg) {
-        return 0;
     }
 
     public ZContext getContext() {
@@ -411,121 +429,105 @@ public abstract class Van {
         this.context = context;
     }
 
-    public Node getScheduler() {
-        return scheduler;
-    }
-
     public Node getMyNode() {
         return myNode;
-    }
-
-    public void setMyNode(Node myNode) {
-        this.myNode = myNode;
     }
 
     public boolean isReady() {
         return ready.get();
     }
 
-    public void setReady(AtomicBoolean ready) {
-        this.ready = ready;
-    }
-
-    public HashMap<Integer, ZMQ.Socket> getSenders() {
-        return senders;
-    }
-
-    public void setSenders(HashMap<Integer, ZMQ.Socket> senders) {
-        this.senders = senders;
-    }
-
-    public void updateLocalID(Message msg, Set<Integer> deadNodes, Meta nodes, Meta recoveryNodes) {
-        Control control = msg.getMeta().getControl();
-        int numNodes = PostOffice.get().getNumServers() + PostOffice.get().getNumServers();
-
-        // sender id in message is -1 when recv register message from node, so we need to assign ID to node
-        if (msg.getMeta().getSender() == -1) {
-            if (!isScheduler || control.getNodes().size() != 1) {
-                LOG.error("Current node: {}, control nodes: {}", myNode, control.getNodes());
+    public void updateLocalID(Message message, Set<Integer> deadNodes, List<Node> registeredNodes, Meta recoveryNodes) {
+        List<Node> nodes = message.getMeta().getControl().getNodes();
+        int expectedSize = PostOffice.get().getNumServers() + PostOffice.get().getNumWorkers();
+        if (message.getMeta().getSender() == -1) {
+            if (!isScheduler || nodes.size() != 1) {
+                LOG.error("Current node: {}, control nodes: {}", myNode, nodes);
             }
-            if (nodes.getControl().getNodes().size() < numNodes) {
-                nodes.getControl().getNodes().add(control.getNodes().get(0));
-            } else {
-                // handle restart nodes
+            if (registeredNodes.size() < expectedSize) {
+                registeredNodes.add(nodes.get(0));
             }
         }
 
-        // update my id
-        for (int i = 0; i < control.getNodes().size(); i++) {
-            Node node = control.getNodes().get(i);
-            if (myNode.getHostname() == node.getHostname() && myNode.getPort() == myNode.getPort()) {
-                if (myNode.getId() == -1) {
-                    this.myNode = new Node(node);
-                }
+        // Update my id
+        for (Node node : nodes) {
+            if (myNode.equals(node) && myNode.getId() == -1) {
+                this.myNode = new Node(node);
             }
         }
     }
 
-    public void processAddNodeCommand(Message msg, Meta nodes, Meta recoveryNodes) {
+    public void processAddNodeCommand(Message message, List<Node> registeredNodes, Meta recoveryNodes) {
         Set<Integer> deadNodes = new HashSet<>(PostOffice.get().getDeadNodes(heartbeatTimeout));
-        updateLocalID(msg, deadNodes, nodes, recoveryNodes);
-        Control ctrl = msg.getMeta().getControl();
+
+        updateLocalID(message, deadNodes, registeredNodes, recoveryNodes);
 
         if (isScheduler) {
-            processAddNodeCommandAtScheduler(msg, nodes, recoveryNodes);
-        } else {
-            for (Node node : ctrl.getNodes()) {
-                String address = node.getHostname() + ":" + node.getPort();
-                if (!connectedNodes.containsKey(address)) {
-                    connect(node);
-                    connectedNodes.put(address, node.getId());
-                }
-                if (!node.isRecovery() && node.getRole() == Role.SERVER)
-                    numServers++;
-                if (!node.isRecovery() && node.getRole() == Role.WORKER)
-                    numWorkers++;
-            }
-            LOG.info("{} is connected to others", myNode.toString());
-            ready.set(true);
+            processAddNodeCommandAtScheduler(message, registeredNodes, recoveryNodes);
+            return;
         }
+
+        for (Node node : message.getMeta().getControl().getNodes()) {
+            String address = node.getHostname() + ":" + node.getPort();
+            if (!connectedNodes.containsKey(address)) {
+                connect(node);
+                connectedNodes.put(address, node.getId());
+            }
+            if (!node.isRecovery() && node.getRole() == Role.SERVER)
+                numServers++;
+            if (!node.isRecovery() && node.getRole() == Role.WORKER)
+                numWorkers++;
+        }
+
+        LOG.info("{} is ready", myNode.toString());
+        // 非 SCHEDULER 节点就绪
+        ready.set(true);
     }
 
     public int getNextTimestamp() {
         return timestamp.getAndIncrement();
     }
 
+    public int getTimestamp() {
+        return timestamp.get();
+    }
+
     public class Receiving implements Runnable {
 
         @Override
         public void run() {
-            Meta nodes = new Meta();
+            List<Node> registeredNodes = new ArrayList<>();
             Meta recoveryNodes = new Meta();
             recoveryNodes.getControl().setCommand(Command.ADD_NODE);
 
             while (true) {
-                LOG.info("{} before recv message", myNode);
-                Message msg = recvMsg();
-                LOG.info("{} after recv message", myNode);
-                recvBytes += msg.getData().size();
-
-                if (!msg.getMeta().getControl().getNodes().isEmpty()) {
-                    Control ctrl = msg.getMeta().getControl();
-                    if (ctrl.getCommand() == Command.TERMINATE) {
+                Message message = recvMsg();
+                Control control = message.getMeta().getControl();
+                // DATA
+                if (control.getNodes().isEmpty()) {
+                    LOG.info("Recv data [non-control], message: {}", message);
+                    processDataMsg(message);
+                    continue;
+                }
+                // CONTROL
+                LOG.info("Recv command: {}, nodes: {}", control.getCommand(), control.getNodes());
+                switch (control.getCommand()) {
+                    case TERMINATE:
                         processTerminateCommand();
                         break;
-                    } else if (ctrl.getCommand() == Command.ADD_NODE) {
-                        LOG.info("{} recv message ADD_NODE", myNode);
-                        processAddNodeCommand(msg, nodes, recoveryNodes);
-                    } else if (ctrl.getCommand() == Command.HEARTBEAT) {
-                        processHeartbeat(msg);
-                    } else if (ctrl.getCommand() == Command.BARRIER) {
-                        processBarrierCommand(msg);
-                    } else {
-                        LOG.error("Unknown type message: {}", msg);
-                    }
-                } else {
-                    processDataMsg(msg);
+                    case ADD_NODE:
+                        processAddNodeCommand(message, registeredNodes, recoveryNodes);
+                        break;
+                    case BARRIER:
+                        processBarrierCommand(message);
+                        break;
+                    case HEARTBEAT:
+                        processHeartbeat(message);
+                        break;
+                    default:
+                        LOG.error("Unknown command: {}", message);
                 }
+                if (control.getCommand() == Command.TERMINATE) break;
             }
         }
     }
@@ -534,10 +536,12 @@ public abstract class Van {
 
         @Override
         public void run() {
-            int interval = Integer.parseInt(System.getenv(Constants.PS_HEARTBEAT_INTERVAL));
+            int interval = Utils.loadIntegerFromEnvironment(Constants.PS_HEARTBEAT_INTERVAL,
+                    Constants.DEFAULT_PS_HEARTBEAT_INTERVAL);
             while (interval > 0 && isReady()) {
                 try {
-                    Thread.sleep(interval);
+                    LOG.info("Sleep {} seconds for heartbeat", interval);
+                    Thread.sleep(interval * 1000L);
                 } catch (InterruptedException e) {
                     LOG.info("Interrupted while sleep in heartbeat thread : {}", e.getMessage());
                 }

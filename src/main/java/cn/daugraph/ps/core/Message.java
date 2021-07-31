@@ -8,7 +8,8 @@ public class Message {
     private Meta meta = new Meta();
     private List<byte[]> data = new ArrayList<>();
 
-    public Message() { }
+    public Message() {
+    }
 
     public Message(Meta meta) {
         this.meta = meta;

@@ -3,7 +3,6 @@ package cn.daugraph.ps.core;
 import cn.daugraph.ps.core.handler.RecvHandler;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -23,10 +22,12 @@ public class Customer {
     private final int appId;
     private final int customerId;
     private final RecvHandler handler;
-    private final Lock lock = new ReentrantLock();
-    private final Condition cond = lock.newCondition();
+
     private final BlockingQueue<Message> queue = new LinkedBlockingDeque<>();
-    private List<int[]> tracker = new ArrayList<>();
+
+    private final List<int[]> tracker = new ArrayList<>();
+    private final Lock trackerLock = new ReentrantLock();
+    private final Condition trackerCond = trackerLock.newCondition();
 
     public Customer(int appId, int customerId, RecvHandler handler) {
         this.appId = appId;
@@ -35,53 +36,45 @@ public class Customer {
     }
 
     public int newRequest(int recver) {
-        lock.lock();
+        trackerLock.lock();
         try {
-            int num = PostOffice.get().getNodeIds(recver).size();
-            tracker.add(new int[]{num, 0});
-            // 这里返回的newRequest对应的下标
+            int groupSize = PostOffice.get().getNodeIds(recver).size();
+            tracker.add(new int[]{groupSize, 0});
             return tracker.size() - 1;
         } finally {
-            lock.unlock();
+            trackerLock.unlock();
         }
     }
 
     public void waitRequest(int timestamp) {
-        lock.lock();
+        trackerLock.lock();
         try {
             while (tracker.get(timestamp)[0] != tracker.get(timestamp)[1]) {
-                cond.await();
+                trackerCond.await();
             }
         } catch (InterruptedException e) {
             e.printStackTrace();
         } finally {
-            lock.unlock();
+            trackerLock.unlock();
         }
     }
 
     public int numResponse(int timestamp) {
-        lock.lock();
+        trackerLock.lock();
         try {
             return tracker.get(timestamp)[1];
         } finally {
-            lock.unlock();
+            trackerLock.unlock();
         }
     }
 
     public void addResponse(int timestamp, int num) {
-        lock.lock();
+        trackerLock.lock();
         try {
             tracker.get(timestamp)[1]++;
         } finally {
-            lock.unlock();
+            trackerLock.unlock();
         }
-    }
-
-    public Customer createCustomer(int appId, int customerId, RecvHandler handler) {
-        Customer customer = new Customer(appId, customerId, handler);
-        PostOffice.get().addCustomer(customer);
-        es.execute(new RecvThread());
-        return customer;
     }
 
     public void accept(Message message) {
@@ -96,19 +89,12 @@ public class Customer {
         return customerId;
     }
 
-    public List<int[]> getTracker() {
-        return tracker;
+    public void initialize() {
+        // 启动接收线程
+        es.execute(new Receiving());
     }
 
-    public void setTracker(List<int[]> tracker) {
-        this.tracker = tracker;
-    }
-
-    public RecvHandler getHandler() {
-        return handler;
-    }
-
-    private class RecvThread implements Runnable {
+    private class Receiving implements Runnable {
 
         @Override
         public void run() {
@@ -122,14 +108,14 @@ public class Customer {
                     }
                     // Process message
                     handler.process(message);
-                    // Request + 1
-                    if (message.getMeta().isRequest()) {
-                        lock.lock();
+                    LOG.info("Current tracker state: {}", tracker);
+                    if (!message.getMeta().isRequest()) {
+                        trackerLock.lock();
                         try {
                             tracker.get(message.getMeta().getTimestamp())[1]++;
-                            cond.notifyAll();
+                            trackerCond.signalAll();
                         } finally {
-                            lock.unlock();
+                            trackerLock.unlock();
                         }
                     }
                 } catch (InterruptedException e) {

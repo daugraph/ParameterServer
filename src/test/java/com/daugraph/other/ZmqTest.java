@@ -46,8 +46,8 @@ public class ZmqTest {
     public void testDealerClient() {
         ZMQ.Context context = ZMQ.context(1);
         ZMQ.Socket sender = context.socket(SocketType.DEALER);
-        // String identity = "ps1";
-        // sender.setIdentity(identity.getBytes());
+        String identity = "ps1";
+        sender.setIdentity(identity.getBytes());
         sender.connect("tcp://localhost:5555");
         sender.send("hello \nworld");
     }
