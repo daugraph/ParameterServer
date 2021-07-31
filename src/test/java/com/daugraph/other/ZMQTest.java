@@ -6,9 +6,9 @@ import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
 import zmq.Msg;
 
-public class ZmqTest {
+public class ZMQTest {
     /**
-     *  使用 Python 客户端链接进行测试：https://zeromq.org/languages/python/
+     *  可以使用 Python 客户端链接进行测试：https://zeromq.org/languages/python/
      *  import zmq
      *  context = zmq.Context()
      *  socket = context.socket(zmq.REQ)
